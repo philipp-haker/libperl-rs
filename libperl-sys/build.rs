@@ -61,8 +61,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     perl.emit_cargo_ldopts();
 
     let archlib = String::from(&perl.dict["archlib"]);
-    let perl_h = Path::new(&archlib).join("CORE/perl.h");
-    let cop_h = Path::new(&archlib).join("CORE/cop.h");
 
     let ccopts = perl.read_ccopts().unwrap();
     println!("# perl ccopts = {:?}, ", ccopts);
@@ -272,8 +270,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             .opaque_type("timex")
 
-            .allowlist_file(perl_h.to_str().unwrap())
-            .allowlist_file(cop_h.to_str().unwrap())
+            // bindgen matches allowlist_file as a regex against the path clang reports.
+            // A raw Windows path is not a valid regex (`\p`, `\e`, ...), and clang may
+            // report mixed separators (e.g. `C:/.../CORE\perl.h`), 
+            // so match by the CORE-relative suffix with either separator instead.
+            .allowlist_file(r".*[/\\]CORE[/\\]perl\.h")
+            .allowlist_file(r".*[/\\]CORE[/\\]cop\.h")
             .allowlist_item("opcode")
             .allowlist_item("(Perl|perl|PL)_.*")
             .allowlist_item("([SAHRGC]V|xpv).*")

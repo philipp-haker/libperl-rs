@@ -86,7 +86,7 @@ impl Av {
     #[inline]
     pub fn get(&self, perl: &Perl, idx: usize) -> Option<Sv> {
         let svp = unsafe {
-            crate::thx_call!(perl, Perl_av_fetch, self.0.as_ptr(), idx as isize, 0)
+            crate::thx_call!(perl, Perl_av_fetch, self.0.as_ptr(), idx as _, 0)
         };
         if svp.is_null() {
             return None;
@@ -129,7 +129,7 @@ impl<'a> Iterator for AvIter<'a> {
         let i = self.idx;
         self.idx += 1;
         let svp = unsafe {
-            crate::thx_call!(self.perl, Perl_av_fetch, self.av.as_ptr(), i as isize, 0)
+            crate::thx_call!(self.perl, Perl_av_fetch, self.av.as_ptr(), i as _, 0)
         };
         Some(if svp.is_null() {
             None

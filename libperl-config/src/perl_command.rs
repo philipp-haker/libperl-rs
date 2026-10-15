@@ -56,7 +56,9 @@ impl PerlCommand {
     }
 
     pub fn read_ldopts(&self) -> Result<Vec<String>, Error> {
-        self.read_embed_opts("ldopts", r"^-[lL]")
+        // Win32 perl passes libperl as a bare file path ("...\CORE\libperl540.a")
+        // instead of -lperl540, so library files are kept too.
+        self.read_embed_opts("ldopts",  r"^-[lL]|\.(a|lib)$")
     }
 
     pub fn read_raw_embed_opts(&self, cmd: &str) -> Result<String, Error> {
@@ -71,9 +73,8 @@ impl PerlCommand {
         let out_str = self.read_raw_embed_opts(cmd)?;
 
         let re = Regex::new(prefix).unwrap();
-        Ok(out_str
-           .split_whitespace()
-           .map(String::from)
+        Ok(split_embed_opts(&out_str)
+            .into_iter()
            .filter(|s| re.is_match(s))
            .collect())
     }
@@ -86,7 +87,12 @@ impl PerlCommand {
             if opt.starts_with("-L") {
                 let libpath = opt.get(2..).unwrap();
                 println!("cargo:rustc-link-search={}", libpath);
-                if std::path::Path::new(libpath).file_name()
+                // rpath is ELF-only.
+                // Windows finds perl5xx.dll via PATH.
+                let is_windows_target = std::env::var_os("CARGO_CFG_TARGET_OS").map_or(cfg!(windows), |env_var| env_var == "windows");
+
+                if !is_windows_target
+                    && std::path::Path::new(libpath).file_name()
                     == Some(std::ffi::OsStr::new("CORE")) {
                         // Embed rpath into ALL link products of the calling
                         // crate — `cargo:rustc-link-arg=` covers cdylibs,
@@ -102,7 +108,68 @@ impl PerlCommand {
             }
             else if opt.starts_with("-l") {
                 println!("cargo:rustc-link-lib={}", opt.get(2..).unwrap());
+            } else if let Some(name) = lib_name_from_path(opt) {
+                // Bare library file (Win32):
+                // link searchdir + library name
+                if let Some(dir) = std::path::Path::new(opt).parent() {
+                    println!("cargo:rustc-link-search=native={}",
+ dir.display());
+                }
+                println!("cargo:rustc-link-lib={}", name)
             }
         }
+    }
+}
+
+/*
+ * ############################################
+ * # HELPER FUNCTIONS NEEDED FOR WIN32 COMPAT #
+ * ############################################
+ */
+/// Splits ExtUtils::Embed output into arguments.
+/// Win32 perl quotes paths (`-I"C:\...\CORE"`, `"C:\...\libperl540.a"`),
+/// so double quotes group whitespace and are removed.
+/// Backslashes are Windows path separators and are kept as-is (no escape handling).
+fn split_embed_opts(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut has_arg = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                has_arg = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if has_arg {
+                    args.push(std::mem::take(&mut cur));
+                    has_arg = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has_arg = true;
+            }
+        }
+    }
+    if has_arg {
+        args.push(cur);
+    }
+    args
+}
+
+/// "C:\...\libperl540.a" -> "perl540", "C:\...\perl540.lib" -> "perl540".
+fn lib_name_from_path(opt:&str) -> Option<String> {
+    use std::path::Path;
+
+    let path = Path::new(opt);
+    let stem = path.file_stem()?.to_str()?;
+    match path.extension()?.to_str()? {
+        //libperlXYZ.a => perlXYZ
+        //   perlXYZ.a => perlXYZ
+        "a" => Some(stem.strip_prefix("lib").unwrap_or(stem).to_string()),
+        "lib" => Some(stem.to_string()),
+        _ => None
     }
 }
